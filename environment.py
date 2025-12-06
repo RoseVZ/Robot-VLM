@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""PyBullet simulation environment with realistic 3D objects"""
+"""
+PyBullet simulation environment - Drop-in replacement with Kenny models
+Compatible with existing navigation pipeline
+"""
 
 import pybullet as p
 import pybullet_data
@@ -8,7 +11,7 @@ import time
 import os
 
 class RobotEnvironment:
-    """Manages PyBullet simulation environment"""
+    """Manages PyBullet simulation environment - Compatible with navigation system"""
     
     def __init__(self, gui=True):
         """Initialize PyBullet environment"""
@@ -17,9 +20,9 @@ class RobotEnvironment:
         if gui:
             self.client = p.connect(p.GUI)
             p.resetDebugVisualizerCamera(
-                cameraDistance=12,
+                cameraDistance=20,
                 cameraYaw=45,
-                cameraPitch=-89,
+                cameraPitch=-60,
                 cameraTargetPosition=[0, 0, 0]
             )
         else:
@@ -28,20 +31,24 @@ class RobotEnvironment:
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.setGravity(0, 0, -9.81)
         
+        # Enable better rendering
+        p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS, 1)
+        p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 1)
+        
         self.plane_id = p.loadURDF("plane.urdf")
         self.robot_id = None
         self.objects = {}
         
-        # Larger bounds for better navigation
+        # Bounds for navigation system
         self.bounds = {
-            'x_min': -5, 'x_max': 5,
-            'y_min': -5, 'y_max': 5,
+            'x_min': -10, 'x_max': 10,
+            'y_min': -10, 'y_max': 10,
             'z_ground': 0
         }
         
         print("✓ PyBullet environment initialized")
     
-    def load_robot(self, position=[-3, -3, 0.3], orientation=[0, 0, 0, 1]):
+    def load_robot(self, position=[0, -5, 0.5], orientation=[0, 0, 0, 1]):
         """Load robot at a safe starting position"""
         try:
             self.robot_id = p.loadURDF("husky/husky.urdf", position, orientation)
@@ -49,215 +56,418 @@ class RobotEnvironment:
         except:
             collision_shape = p.createCollisionShape(p.GEOM_CYLINDER, radius=0.3, height=0.5)
             visual_shape = p.createVisualShape(p.GEOM_CYLINDER, radius=0.3, length=0.5,
-                                               rgbaColor=[0, 0.5, 1, 1])
+                                               rgbaColor=[1, 0.5, 0, 1])
             self.robot_id = p.createMultiBody(baseMass=5,
                                              baseCollisionShapeIndex=collision_shape,
                                              baseVisualShapeIndex=visual_shape,
                                              basePosition=position)
-            print(f"✓ Simple robot loaded at position ({position[0]:.1f}, {position[1]:.1f})")
+            print(f"✓ Orange robot loaded at position ({position[0]:.1f}, {position[1]:.1f})")
         
         return self.robot_id
     
-    def create_simple_scene(self):
-        """Create a simple scene with basic shapes (kept for compatibility)"""
+    def _load_kenny_model(self, obj_path, position=[0, 0, 0], 
+                         orientation=[0, 0, 0, 1], scale=10.0, 
+                         fixed=True, color=None):
+        """
+        Load Kenny's OBJ model
         
-        # Walls - outer boundary
-        wall_positions = [
-            ([-4.8, 0, 1], [0.2, 4.8, 2]),    # West wall
-            ([4.8, 0, 1], [0.2, 4.8, 2]),     # East wall
-            ([0, -4.8, 1], [4.8, 0.2, 2]),    # South wall
-            ([0, 4.8, 1], [4.8, 0.2, 2]),     # North wall
-        ]
+        Args:
+            obj_path: Path to .obj file
+            position: [x, y, z] position
+            orientation: [x, y, z, w] quaternion
+            scale: Scale multiplier
+            fixed: If True, object won't move
+            color: Optional [r, g, b, a] color override
         
-        for i, (pos, half_extents) in enumerate(wall_positions):
-            collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
-            visual = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents,
-                                        rgbaColor=[0.7, 0.7, 0.7, 1])
-            wall = p.createMultiBody(baseMass=0,
-                                    baseCollisionShapeIndex=collision,
-                                    baseVisualShapeIndex=visual,
-                                    basePosition=pos)
-            self.objects[f'wall_{i}'] = wall
-        
-        # Furniture - well-spaced for navigation
-        furniture = [
-            ('table', [2.5, 2.5, 0.4], [0.6, 0.6, 0.4], [0.6, 0.3, 0.1, 1]),
-            ('chair', [1.5, 2.5, 0.25], [0.35, 0.35, 0.5], [0.8, 0.4, 0.2, 1]),
-            ('sofa', [-2.5, 2.5, 0.3], [1.0, 0.6, 0.6], [0.2, 0.6, 0.8, 1]),
-            ('desk', [2.5, -2.0, 0.4], [0.8, 0.5, 0.4], [0.4, 0.25, 0.1, 1]),
-            ('bookshelf', [3.5, -1.0, 0.8], [0.3, 0.6, 1.6], [0.3, 0.2, 0.1, 1]),
-        ]
-        
-        for name, pos, half_extents, color in furniture:
-            collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
-            visual = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents,
-                                        rgbaColor=color)
-            obj_id = p.createMultiBody(baseMass=0,
-                                      baseCollisionShapeIndex=collision,
-                                      baseVisualShapeIndex=visual,
-                                      basePosition=pos)
-            self.objects[name] = obj_id
-        
-        print(f"✓ Scene created with {len(furniture)} objects")
-        print(f"  Available: {[name for name in self.objects.keys() if not name.startswith('wall')]}")
-        return self.objects
+        Returns:
+            Object ID or None if failed
+        """
+        try:
+            # Create visual shape
+            visual_kwargs = {
+                'shapeType': p.GEOM_MESH,
+                'fileName': obj_path,
+                'meshScale': [scale, scale, scale],
+            }
+            
+            if color is not None:
+                visual_kwargs['rgbaColor'] = color
+            
+            visual_shape = p.createVisualShape(**visual_kwargs)
+            
+            # Create collision shape
+            collision_shape = p.createCollisionShape(
+                shapeType=p.GEOM_MESH,
+                fileName=obj_path,
+                meshScale=[scale, scale, scale]
+            )
+            
+            # Create multi-body
+            mass = 0 if fixed else 1.0
+            
+            obj_id = p.createMultiBody(
+                baseMass=mass,
+                baseCollisionShapeIndex=collision_shape,
+                baseVisualShapeIndex=visual_shape,
+                basePosition=position,
+                baseOrientation=orientation
+            )
+            
+            return obj_id
+            
+        except Exception as e:
+            print(f"  ✗ Failed to load {obj_path}: {e}")
+            return None
+    
+    # ========================================
+    # SCENE CREATION METHODS (For compatibility)
+    # ========================================
     
     def create_realistic_scene(self):
-        """Create scene with realistic 3D URDF models from PyBullet"""
-        
-        print("\nLoading realistic 3D objects...")
-        
-        # Walls (same as before)
-        wall_positions = [
-            ([-4.8, 0, 1], [0.2, 4.8, 2]),
-            ([4.8, 0, 1], [0.2, 4.8, 2]),
-            ([0, -4.8, 1], [4.8, 0.2, 2]),
-            ([0, 4.8, 1], [4.8, 0.2, 2]),
-        ]
-        
-        for i, (pos, half_extents) in enumerate(wall_positions):
-            collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
-            visual = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents,
-                                        rgbaColor=[0.7, 0.7, 0.7, 1])
-            wall = p.createMultiBody(baseMass=0,
-                                    baseCollisionShapeIndex=collision,
-                                    baseVisualShapeIndex=visual,
-                                    basePosition=pos)
-            self.objects[f'wall_{i}'] = wall
-        
-        # Realistic 3D objects using PyBullet's built-in URDFs
-        realistic_objects = [
-            # Format: (name, urdf_file, position, orientation, scale)
-            
-            # Tables
-            ('table', 'table/table.urdf', [2.5, 2.5, 0], [0, 0, 0, 1], 1.0),
-            ('desk', 'table_square/table_square.urdf', [2.5, -2.0, 0], [0, 0, 0, 1], 0.8),
-            
-            # Chairs (using small tables as chairs)
-            ('chair', 'table_square/table_square.urdf', [1.5, 2.5, 0], [0, 0, 0, 1], 0.5),
-            ('chair_2', 'table_square/table_square.urdf', [3.5, 2.5, 0], [0, 0, 0, 1], 0.5),
-            
-            # Decorative objects
-            ('teddy', 'teddy_vhacd.urdf', [-2.5, 2.5, 0.5], [0, 0, 0, 1], 1.5),
-            ('duck', 'duck_vhacd.urdf', [-3, -2, 0.3], [0, 0, 0.707, 0.707], 1.0),
-            
-            # Boxes/containers
-            ('red_box', 'cube.urdf', [3.5, -1.0, 0.5], [0, 0, 0, 1], 1.0),
-            ('blue_box', 'sphere2.urdf', [-1, -3, 0.5], [0, 0, 0, 1], 1.0),
-        ]
-        
-        loaded_count = 0
-        for name, urdf_file, pos, orn, scale in realistic_objects:
-            try:
-                # Load URDF
-                obj_id = p.loadURDF(
-                    urdf_file,
-                    basePosition=pos,
-                    baseOrientation=orn,
-                    globalScaling=scale,
-                    useFixedBase=True  # Make objects static
-                )
-                self.objects[name] = obj_id
-                loaded_count += 1
-                print(f"  ✓ Loaded {name} ({urdf_file})")
-            except Exception as e:
-                print(f"  ✗ Could not load {name}: {e}")
-                # Fallback to simple box
-                self._create_fallback_object(name, pos)
-        
-        print(f"\n✓ Scene created with {loaded_count} realistic objects")
-        print(f"  Available: {[name for name in self.objects.keys() if not name.startswith('wall')]}")
-        return self.objects
+        """
+        🔥 COMPATIBILITY METHOD
+        Creates Kenny apartment (alias for create_multiroom_apartment)
+        """
+        print("\n✓ Using Kenny realistic apartment scene")
+        return self.create_multiroom_apartment()
     
     def create_colorful_scene(self):
-        """Create scene with colorful objects (good for CLIP testing)"""
+        """
+        🔥 COMPATIBILITY METHOD
+        Creates Kenny apartment (alias for create_multiroom_apartment)
+        """
+        print("\n✓ Using Kenny colorful apartment scene")
+        return self.create_multiroom_apartment()
+    
+    def create_simple_scene(self):
+        """
+        🔥 COMPATIBILITY METHOD
+        Creates Kenny apartment (alias for create_multiroom_apartment)
+        """
+        print("\n✓ Using Kenny simple apartment scene")
+        return self.create_multiroom_apartment()
+    
+    def create_multiroom_apartment(self):
+        """
+        Create apartment with Kenny models
         
-        print("\nCreating colorful scene...")
+        Layout:
+        ┌─────────────┐     ┌─────────────┐
+        │   BEDROOM   │🚪   │   KITCHEN   │
+        │  (BLUE)     │     │  (GREEN)    │
+        │  (-4, 4)    │     │  (4, 4)     │
+        └──────🚪─────┘     └──────🚪─────┘
+                │               │
+        ┌───────┴───────────────┴───────┐
+        │      LIVING ROOM              │
+        │      (BROWN)                  │
+        │      (0, -4)                  │
+        └───────────────────────────────┘
+        """
         
-        # Walls
-        wall_positions = [
-            ([-4.8, 0, 1], [0.2, 4.8, 2]),
-            ([4.8, 0, 1], [0.2, 4.8, 2]),
-            ([0, -4.8, 1], [4.8, 0.2, 2]),
-            ([0, 4.8, 1], [4.8, 0.2, 2]),
-        ]
+        print("\n" + "="*60)
+        print("CREATING KENNY 3-ROOM APARTMENT")
+        print("="*60 + "\n")
         
-        for i, (pos, half_extents) in enumerate(wall_positions):
-            collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
-            visual = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents,
-                                        rgbaColor=[0.7, 0.7, 0.7, 1])
-            wall = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=collision,
-                                    baseVisualShapeIndex=visual, basePosition=pos)
-            self.objects[f'wall_{i}'] = wall
+        wall_height = 3.0
+        wall_thickness = 0.2
         
-        # Colorful blocks for CLIP testing
-        colorful_objects = [
-            # (name, urdf, position, color_description)
-            ('red_block', 'cube.urdf', [2.5, 2.5, 0.5], 'red'),
-            ('blue_block', 'cube.urdf', [-2.5, 2.5, 0.5], 'blue'),
-            # ('yellow_sphere', 'sphere2.urdf', [2.5, -2.5, 0.5], 'yellow'),
-            # ('green_sphere', 'sphere2.urdf', [-2.5, -2.5, 0.5], 'green'),
-            ('brown_teddy', 'teddy_vhacd.urdf', [0, 3, 0.5], 'brown'),
-            ('yellow_duck', 'duck_vhacd.urdf', [0, -3, 0.3], 'yellow'),
-        ]
-        
-        # Color mapping for blocks
-        color_map = {
-            'red': [1, 0, 0, 1],
-            'blue': [0, 0, 1, 1],
-            'green': [0, 1, 0, 1],
-            'yellow': [1, 1, 0, 1],
-            'brown': [0.6, 0.3, 0.1, 1],
+        # Room colors
+        colors = {
+            'living': [0.8, 0.6, 0.3, 1],    # Brown
+            'bedroom': [0.3, 0.5, 0.9, 1],   # Blue
+            'kitchen': [0.4, 0.8, 0.4, 1],   # Green
         }
         
-        loaded_count = 0
-        for name, urdf_file, pos, color in colorful_objects:
-            try:
-                obj_id = p.loadURDF(urdf_file, basePosition=pos, useFixedBase=True)
-                self.objects[name] = obj_id
-                
-                # Try to change color if it's a basic shape
-                if color in color_map and 'block' in name:
-                    p.changeVisualShape(obj_id, -1, rgbaColor=color_map[color])
-                
-                loaded_count += 1
-                print(f"  ✓ Loaded {name}")
-            except Exception as e:
-                print(f"  ✗ Could not load {name}: {e}")
+        # ========================================
+        # WALLS
+        # ========================================
         
-        print(f"\n✓ Colorful scene created with {loaded_count} objects")
-        print(f"  Available: {[name for name in self.objects.keys() if not name.startswith('wall')]}")
+        walls = []
+        
+        # Living room walls
+        living_walls = [
+            ([-6, -4, wall_height/2], [wall_thickness, 4, wall_height/2]),
+            ([6, -4, wall_height/2], [wall_thickness, 4, wall_height/2]),
+            ([0, -8, wall_height/2], [6, wall_thickness, wall_height/2]),
+        ]
+        
+        for pos, half_extents in living_walls:
+            collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
+            visual = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents, 
+                                        rgbaColor=colors['living'])
+            wall = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=collision,
+                                    baseVisualShapeIndex=visual, basePosition=pos)
+            walls.append(wall)
+        
+        # Bedroom walls
+        bedroom_walls = [
+            ([-8, 4, wall_height/2], [wall_thickness, 4, wall_height/2]),
+            ([-4, 8, wall_height/2], [4, wall_thickness, wall_height/2]),
+            ([-6.5, 0, wall_height/2], [1.5, wall_thickness, wall_height/2]),
+            ([-1.5, 0, wall_height/2], [1.5, wall_thickness, wall_height/2]),
+            ([0, 1, wall_height/2], [wall_thickness, 1, wall_height/2]),
+            ([0, 5.5, wall_height/2], [wall_thickness, 2.5, wall_height/2]),
+        ]
+        
+        for pos, half_extents in bedroom_walls:
+            collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
+            visual = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents, 
+                                        rgbaColor=colors['bedroom'])
+            wall = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=collision,
+                                    baseVisualShapeIndex=visual, basePosition=pos)
+            walls.append(wall)
+        
+        # Kitchen walls
+        kitchen_walls = [
+            ([8, 4, wall_height/2], [wall_thickness, 4, wall_height/2]),
+            ([4, 8, wall_height/2], [4, wall_thickness, wall_height/2]),
+            ([1.5, 0, wall_height/2], [1.5, wall_thickness, wall_height/2]),
+            ([6.5, 0, wall_height/2], [1.5, wall_thickness, wall_height/2]),
+        ]
+        
+        for pos, half_extents in kitchen_walls:
+            collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
+            visual = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents, 
+                                        rgbaColor=colors['kitchen'])
+            wall = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=collision,
+                                    baseVisualShapeIndex=visual, basePosition=pos)
+            walls.append(wall)
+        
+        # Store walls
+        for i, wall in enumerate(walls):
+            self.objects[f'wall_{i}'] = wall
+        
+        # ========================================
+        # COLORED FLOORS
+        # ========================================
+        
+        floor_height = 0.02
+        floor_markers = [
+            ('living_floor', [0, -4, floor_height], [5.5, 3.5, 0.01], colors['living']),
+            ('bedroom_floor', [-4, 4, floor_height], [3.5, 3.5, 0.01], colors['bedroom']),
+            ('kitchen_floor', [4, 4, floor_height], [3.5, 3.5, 0.01], colors['kitchen']),
+        ]
+        
+        for name, pos, half_extents, color in floor_markers:
+            collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
+            visual = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents, rgbaColor=color)
+            marker = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=collision,
+                                      baseVisualShapeIndex=visual, basePosition=pos)
+            self.objects[name] = marker
+        
+        print(f"✓ Created {len(walls)} walls + 3 colored floors")
+        
+        # ========================================
+        # KENNY FURNITURE
+        # ========================================
+        
+        print("\n📦 Loading furniture...")
+        
+        # Check if Kenny models exist
+        kenny_available = os.path.exists('./object_models/loungeSofa.obj')
+        
+        if kenny_available:
+            print("  ✓ Kenny models found - loading realistic furniture")
+            self._load_kenny_furniture()
+        else:
+            print("  ⚠ Kenny models not found at './object_models/'")
+            print("  ✓ Loading fallback PyBullet objects")
+            self._load_fallback_furniture()
+        
+        # ========================================
+        # SUMMARY
+        # ========================================
+        
+        print("\n" + "="*60)
+        print("3-ROOM APARTMENT SUMMARY:")
+        print("="*60)
+        print("""
+        ┌─────────────┐     ┌─────────────┐
+        │   BEDROOM   │🚪   │   KITCHEN   │
+        │  (BLUE)     │     │  (GREEN)    │
+        └──────🚪─────┘     └──────🚪─────┘
+                │               │
+        ┌───────┴───────────────┴───────┐
+        │      LIVING ROOM              │
+        │      (BROWN)                  │
+        └───────────────────────────────┘
+        """)
+        print("🟤 BROWN floor = LIVING ROOM")
+        print("🔵 BLUE floor = BEDROOM")
+        print("🟢 GREEN floor = KITCHEN")
+        
+        # Print available objects for CLIP/GroundingDINO
+        obj_names = [k for k in self.objects.keys() if not k.startswith('wall') and 'floor' not in k]
+        print(f"\n📋 Available objects: {obj_names}")
+        print("="*60 + "\n")
+        
         return self.objects
     
-    def _create_fallback_object(self, name, position):
-        """Create a simple box as fallback if URDF loading fails"""
-        collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.3, 0.3, 0.3])
-        visual = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.3, 0.3, 0.3],
-                                     rgbaColor=[0.5, 0.5, 0.5, 1])
-        obj_id = p.createMultiBody(baseMass=0,
-                                   baseCollisionShapeIndex=collision,
-                                   baseVisualShapeIndex=visual,
-                                   basePosition=position)
-        self.objects[name] = obj_id
-        print(f"  ⚠ Created fallback box for {name}")
+    def _load_kenny_furniture(self):
+        """Load Kenny .obj furniture models"""
+        
+        # Base rotation to fix Y-up to Z-up
+        base_rotation = p.getQuaternionFromEuler([-np.pi/2, 0, 0])
+        
+        furniture_config = [
+            # LIVING ROOM
+            # {
+            #     'name': 'sofa',
+            #     'model': './object_models/loungeSofa.obj',
+            #     'position': [-3, -5, 0],
+            #     'scale': 3.0,
+            #     'yaw': 180,
+            #     'color': [1, 0.2, 0.1, 1]
+            # },
+            {
+                'name': 'coffee_table',
+                'model': './object_models/table.obj',
+                'position': [-3, -6, 0],
+                'scale': 2.0,
+                'yaw': 180,
+                'color': [0.3, 0.2, 0.1, 1]
+            },
+            {
+                'name': 'lamp',
+                'model': './object_models/lampSquareFloor.obj',
+                'position': [2, -5, 0],
+                'scale': 2.0,
+                'yaw': 0,
+                'color': None
+            },
+            
+            # BEDROOM
+            {
+                'name': 'bed',
+                'model': './object_models/bedDouble.obj',
+                'position': [-5, 5, 0],
+                'scale': 2.0,
+                'yaw': 180,
+                'color': None
+            },
+            {
+                'name': 'nightstand_left',
+                'model': './object_models/cabinetBedDrawer.obj',
+                'position': [-6, 7, 0],
+                'scale': 3.0,
+                'yaw': 180,
+                'color': [0.3, 0.2, 0.1, 1]
+            },
+            {
+                'name': 'nightstand_right',
+                'model': './object_models/cabinetBedDrawer.obj',
+                'position': [-3, 7, 0],
+                'scale': 3.0,
+                'yaw': 180,
+                'color': [0.3, 0.2, 0.1, 1]
+            },
+            {
+                'name': 'coat_rack',
+                'model': './object_models/coatRackStanding.obj',
+                'position': [-7, 2, 0],
+                'scale': 3.0,
+                'yaw': 0,
+                'color': [173/255, 216/255, 230/255, 1]
+            },
+            
+            # KITCHEN
+            {
+                'name': 'fridge',
+                'model': './object_models/kitchenFridgeLarge.obj',
+                'position': [6, 5, 0],
+                'scale': 3.0,
+                'yaw': 180,
+                'color': [0.5, 0.5, 0.5, 1]
+            },
+            {
+                'name': 'stove',
+                'model': './object_models/kitchenStove.obj',
+                'position': [3, 5, 0],
+                'scale': 3.0,
+                'yaw': 180,
+                'color': [0.5, 0.5, 0.5, 1]
+            },
+            {
+                'name': 'sink',
+                'model': './object_models/kitchenSink.obj',
+                'position': [2, 5, 0],
+                'scale': 3.0,
+                'yaw': 180,
+                'color': [0.5, 0.5, 0.5, 1]
+            },
+            {
+                'name': 'toaster',
+                'model': './object_models/toaster.obj',
+                'position': [5, 5, 2],
+                'scale': 3.0,
+                'yaw': 180,
+                'color': [173/255, 216/255, 230/255, 1]
+            },
+        ]
+        
+        loaded_count = 0
+        for config in furniture_config:
+            if not os.path.exists(config['model']):
+                continue
+            
+            # Apply rotations
+            yaw_rad = np.radians(config['yaw'])
+            user_rotation = p.getQuaternionFromEuler([0, 0, yaw_rad])
+            orientation = p.multiplyTransforms([0,0,0], base_rotation, 
+                                              [0,0,0], user_rotation)[1]
+            
+            obj_id = self._load_kenny_model(
+                obj_path=config['model'],
+                position=config['position'],
+                orientation=orientation,
+                scale=config['scale'],
+                fixed=True,
+                color=config['color']
+            )
+            
+            if obj_id is not None:
+                self.objects[config['name']] = obj_id
+                loaded_count += 1
+        
+        print(f"  ✓ Loaded {loaded_count} Kenny furniture pieces")
     
-    def list_available_urdfs(self):
-        """List all available URDF files in pybullet_data"""
-        data_path = pybullet_data.getDataPath()
-        print(f"\nSearching for URDF files in: {data_path}\n")
+    def _load_fallback_furniture(self):
+        """Load PyBullet URDF furniture as fallback"""
         
-        available_urdfs = []
-        for root, dirs, files in os.walk(data_path):
-            for file in files:
-                if file.endswith('.urdf'):
-                    rel_path = os.path.relpath(os.path.join(root, file), data_path)
-                    available_urdfs.append(rel_path)
+        fallback_furniture = [
+            # Living room
+            ('sofa', 'table/table.urdf', [-3, -5, 0], 0.8),
+            ('coffee_table', 'table_square/table_square.urdf', [-3, -6, 0], 0.6),
+            ('lamp', 'sphere2.urdf', [2, -5, 0.3], 0.3),
+            
+            # Bedroom
+            ('bed', 'table/table.urdf', [-5, 5, 0], 1.2),
+            ('nightstand_left', 'table_square/table_square.urdf', [-6, 7, 0], 0.5),
+            ('nightstand_right', 'table_square/table_square.urdf', [-3, 7, 0], 0.5),
+            ('teddy', 'teddy_vhacd.urdf', [-7, 2, 0.5], 1.2),
+            
+            # Kitchen
+            ('fridge', 'cube.urdf', [6, 5, 0], 1.0),
+            ('stove', 'cube.urdf', [3, 5, 0], 0.8),
+            ('sink', 'cube.urdf', [2, 5, 0], 0.7),
+            ('toaster', 'sphere2.urdf', [5, 5, 0.5], 0.3),
+        ]
         
-        print("Available URDF files:")
-        for i, urdf in enumerate(sorted(available_urdfs), 1):
-            print(f"  {i}. {urdf}")
+        loaded_count = 0
+        for name, urdf, pos, scale in fallback_furniture:
+            try:
+                obj_id = p.loadURDF(urdf, basePosition=pos, globalScaling=scale, useFixedBase=True)
+                self.objects[name] = obj_id
+                loaded_count += 1
+            except:
+                pass
         
-        return available_urdfs
+        print(f"  ✓ Loaded {loaded_count} fallback furniture pieces")
+    
+    # ========================================
+    # COMPATIBILITY METHODS (Keep for pipeline)
+    # ========================================
     
     def get_robot_state(self):
         """Get robot position and orientation"""
@@ -289,6 +499,85 @@ class RobotEnvironment:
         orientation = p.getQuaternionFromEuler([0, 0, yaw])
         p.resetBasePositionAndOrientation(self.robot_id, position, orientation)
     
+    def get_camera_image(self, width=640, height=480):
+        """Get camera image from robot's perspective"""
+        if self.robot_id is None:
+            return None, None
+        
+        robot_state = self.get_robot_state()
+        pos = robot_state['position']
+        yaw = robot_state['yaw']
+        
+        camera_pos = [
+            pos[0] + 0.3 * np.cos(yaw),
+            pos[1] + 0.3 * np.sin(yaw),
+            pos[2] + 0.5
+        ]
+        
+        target_pos = [
+            pos[0] + 2.0 * np.cos(yaw),
+            pos[1] + 2.0 * np.sin(yaw),
+            pos[2] + 0.5
+        ]
+        
+        view_matrix = p.computeViewMatrix(
+            cameraEyePosition=camera_pos,
+            cameraTargetPosition=target_pos,
+            cameraUpVector=[0, 0, 1]
+        )
+        
+        proj_matrix = p.computeProjectionMatrixFOV(
+            fov=60, aspect=width/height,
+            nearVal=0.1, farVal=10.0
+        )
+        
+        img = p.getCameraImage(
+            width, height,
+            view_matrix, proj_matrix,
+            renderer=p.ER_BULLET_HARDWARE_OPENGL
+        )
+        
+        rgb = np.array(img[2])[:, :, :3]
+        depth = np.array(img[3])
+        
+        return rgb, depth
+    
+    def get_camera_image_at_angle(self, position, yaw, width=640, height=480):
+        """Get camera image from specific position and angle"""
+        camera_pos = [
+            position[0] + 0.3 * np.cos(yaw),
+            position[1] + 0.3 * np.sin(yaw),
+            position[2] + 0.5
+        ]
+        
+        target_pos = [
+            position[0] + 2.0 * np.cos(yaw),
+            position[1] + 2.0 * np.sin(yaw),
+            position[2] + 0.5
+        ]
+        
+        view_matrix = p.computeViewMatrix(
+            cameraEyePosition=camera_pos,
+            cameraTargetPosition=target_pos,
+            cameraUpVector=[0, 0, 1]
+        )
+        
+        proj_matrix = p.computeProjectionMatrixFOV(
+            fov=60, aspect=width/height,
+            nearVal=0.1, farVal=10.0
+        )
+        
+        img = p.getCameraImage(
+            width, height,
+            view_matrix, proj_matrix,
+            renderer=p.ER_BULLET_HARDWARE_OPENGL
+        )
+        
+        rgb = np.array(img[2])[:, :, :3]
+        depth = np.array(img[3])
+        
+        return rgb, depth
+    
     def step_simulation(self):
         """Step the simulation forward"""
         p.stepSimulation()
@@ -301,51 +590,24 @@ class RobotEnvironment:
         print("✓ PyBullet disconnected")
 
 
-def test_scenes():
-    """Test different scene types"""
-    
+# Quick test
+if __name__ == "__main__":
     print("\n" + "="*60)
-    print("TESTING PYBULLET 3D OBJECTS")
+    print("TESTING KENNY APARTMENT ENVIRONMENT")
     print("="*60 + "\n")
     
     env = RobotEnvironment(gui=True)
+    env.load_robot(position=[0, -5, 0.5])
     
-    # Test 1: List available URDFs
-    print("\n1. Discovering available URDF files...")
-    input("Press Enter to list all available URDFs...")
-    env.list_available_urdfs()
+    # Test that all scene creation methods work
+    env.create_realistic_scene()
     
-    # Test 2: Load robot
-    input("\nPress Enter to load robot...")
-    env.load_robot(position=[-3, -3, 0.3])
+    print("\n▶ Simulation running... Close window to exit.")
     
-    # Test 3: Choose scene type
-    print("\n" + "="*60)
-    print("Choose scene type:")
-    print("1. Simple scene (basic shapes)")
-    print("2. Realistic scene (URDF models)")
-    print("3. Colorful scene (for CLIP testing)")
-    print("="*60)
-    
-    choice = input("\nEnter 1, 2, or 3: ").strip()
-    
-    if choice == "1":
-        env.create_simple_scene()
-    elif choice == "2":
-        env.create_realistic_scene()
-    else:
-        env.create_colorful_scene()
-    
-    # Keep simulation running
-    print("\nSimulation running... Close PyBullet window to exit.")
     try:
         while True:
             env.step_simulation()
     except KeyboardInterrupt:
-        print("\nStopped by user")
+        print("\nStopped")
     
     env.close()
-
-
-if __name__ == "__main__":
-    test_scenes()
