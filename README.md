@@ -8,14 +8,7 @@ A robotics navigation system that combines Vision-Language Models (VLMs) with cl
 - [Features](#features)
 - [System Architecture](#system-architecture)
 - [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Usage](#usage)
-- [Project Structure](#project-structure)
-- [Configuration](#configuration)
 - [Experimental Results](#experimental-results)
-- [Troubleshooting](#troubleshooting)
-- [Citation](#citation)
-- [License](#license)
 
 ---
 
